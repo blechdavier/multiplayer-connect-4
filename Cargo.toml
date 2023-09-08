@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 tokio = {version="1.32.0", features = ["full"]}
 connect_4 = {path="./connect_4"}
+rand = "0.8.5"

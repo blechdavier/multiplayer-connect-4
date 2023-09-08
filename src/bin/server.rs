@@ -1,10 +1,13 @@
+use connect_4::send_packet;
 use connect_4::C2SPacket;
+use connect_4::Color;
 use connect_4::Deserialize;
+use connect_4::S2CPacket;
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 
+use rand::Rng;
 use std::{io, rc::Rc};
-use tokio::sync::Mutex;
 
 // async fn accept_connection(mut stream: TcpStream, state: Arc<Mutex<i32>>) {
 //     loop {
@@ -16,14 +19,43 @@ use tokio::sync::Mutex;
 //     }
 // }
 
-async fn play_game(stream1: TcpStream, stream2: TcpStream) {
+async fn play_game(mut stream1: TcpStream, mut stream2: TcpStream) {
     let mut board = [[0; 7]; 6];
-    let mut turn = 0;
+    let mut turn = Color::Red;
     loop {
-        let packet = read_c2s_packet(stream1).await;
-        println!("read c2s packet from client 1: {:?}", packet);
-        let packet = read_c2s_packet(stream2).await;
-        println!("read c2s packet from client 2: {:?}", packet);
+        let name1 = match read_c2s_packet(&mut stream1).await {
+            C2SPacket::Init { name } => name,
+            _ => panic!("Expected init packet"),
+        };
+        let name2 = match read_c2s_packet(&mut stream2).await {
+            C2SPacket::Init { name } => name,
+            _ => panic!("Expected init packet"),
+        };
+        // choose player to go first randomly
+        let mut rng = rand::thread_rng();
+        let color1 = if rng.gen() { Color::Red } else { Color::Yellow };
+        let color2 = if color1 == Color::Red {
+            Color::Yellow
+        } else {
+            Color::Red
+        };
+        // send startgame packet to each client
+        send_packet(
+            S2CPacket::GameStart {
+                opponent: name2.clone(),
+                your_color: color1,
+            },
+            &mut stream1,
+        )
+        .await;
+        send_packet(
+            S2CPacket::GameStart {
+                opponent: name1.clone(),
+                your_color: color2,
+            },
+            &mut stream2,
+        )
+        .await;
     }
 }
 
@@ -47,13 +79,11 @@ async fn main() -> io::Result<()> {
 
     loop {
         let (socket, _) = listener.accept().await?;
-        if let Some(other_player) = queue {
-            tokio::spawn(async move {
-                play_game(socket, *other_player).await;
-            });
-            queue = None;
-        } else {
-            queue = Some(Rc::new(socket));
-        }
+        println!("accepted connection, waiting for second player");
+        let (socket2, _) = listener.accept().await?;
+        println!("accepted second connection, starting game");
+        tokio::spawn(async move {
+            play_game(socket, socket2).await;
+        });
     }
 }

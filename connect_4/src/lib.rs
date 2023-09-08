@@ -2,7 +2,10 @@ use std::error::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
-pub async fn send_packet(packet: C2SPacket, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+pub async fn send_packet(
+    packet: impl Serialize,
+    stream: &mut TcpStream,
+) -> Result<(), Box<dyn Error>> {
     // write to temporary buf
     let buf = packet.serialize();
     // write length of buf
