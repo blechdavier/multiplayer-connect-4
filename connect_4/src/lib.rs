@@ -2,8 +2,8 @@ use std::error::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
-pub async fn send_packet(
-    packet: impl Serialize,
+pub async fn send_packet<T: Serialize>(
+    packet: T,
     stream: &mut TcpStream,
 ) -> Result<(), Box<dyn Error>> {
     // write to temporary buf
@@ -24,7 +24,7 @@ pub trait Deserialize {
 }
 
 #[derive(PartialEq, Debug)]
-pub enum C2SPacket {
+pub enum ServerBoundPacket {
     Init { name: String },
     Move { col: u8 },
     ProposeDraw,
@@ -33,10 +33,10 @@ pub enum C2SPacket {
 }
 
 #[derive(PartialEq, Debug)]
-pub enum S2CPacket {
+pub enum ClientBoundPacket {
     AddedToQueue,
     GameStart { opponent: String, your_color: Color },
-    Move { col: u8 },
+    Move { col: u8, color: Color },
     DrawWasProposed,
     GameResult { result: GameResult },
 }
@@ -46,18 +46,18 @@ pub enum Color {
     Red,
     Yellow,
 }
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 
 pub enum GameResult {
+    InProgress,
     RedWin,
     YellowWin,
     Draw,
 }
-
-impl Serialize for C2SPacket {
+impl Serialize for ServerBoundPacket {
     fn serialize(&self) -> Vec<u8> {
         match self {
-            C2SPacket::Init { name } => {
+            ServerBoundPacket::Init { name } => {
                 let mut buf = Vec::new();
                 buf.push(0);
                 if name.len() > 32 {
@@ -67,23 +67,23 @@ impl Serialize for C2SPacket {
                 }
                 buf
             }
-            C2SPacket::Move { col } => {
+            ServerBoundPacket::Move { col } => {
                 let mut buf = Vec::new();
                 buf.push(1);
                 buf.push(*col);
                 buf
             }
-            C2SPacket::ProposeDraw => {
+            ServerBoundPacket::ProposeDraw => {
                 let mut buf = Vec::new();
                 buf.push(2);
                 buf
             }
-            C2SPacket::AcceptDraw => {
+            ServerBoundPacket::AcceptDraw => {
                 let mut buf = Vec::new();
                 buf.push(3);
                 buf
             }
-            C2SPacket::Forfeit => {
+            ServerBoundPacket::Forfeit => {
                 let mut buf = Vec::new();
                 buf.push(4);
                 buf
@@ -92,30 +92,30 @@ impl Serialize for C2SPacket {
     }
 }
 
-impl Deserialize for C2SPacket {
+impl Deserialize for ServerBoundPacket {
     fn deserialize(buf: &[u8]) -> Self {
         match buf[0] {
-            0 => C2SPacket::Init {
+            0 => ServerBoundPacket::Init {
                 name: String::from_utf8_lossy(&buf[1..]).to_string(),
             },
-            1 => C2SPacket::Move { col: buf[1] },
-            2 => C2SPacket::ProposeDraw,
-            3 => C2SPacket::AcceptDraw,
-            4 => C2SPacket::Forfeit,
+            1 => ServerBoundPacket::Move { col: buf[1] },
+            2 => ServerBoundPacket::ProposeDraw,
+            3 => ServerBoundPacket::AcceptDraw,
+            4 => ServerBoundPacket::Forfeit,
             _ => panic!("Invalid packet type"),
         }
     }
 }
 
-impl Serialize for S2CPacket {
+impl Serialize for ClientBoundPacket {
     fn serialize(&self) -> Vec<u8> {
         match self {
-            S2CPacket::AddedToQueue => {
+            ClientBoundPacket::AddedToQueue => {
                 let mut buf = Vec::new();
                 buf.push(0);
                 buf
             }
-            S2CPacket::GameStart {
+            ClientBoundPacket::GameStart {
                 opponent,
                 your_color,
             } => {
@@ -129,24 +129,29 @@ impl Serialize for S2CPacket {
                 });
                 buf
             }
-            S2CPacket::Move { col } => {
+            ClientBoundPacket::Move { col, color } => {
                 let mut buf = Vec::new();
                 buf.push(2);
                 buf.push(*col);
+                buf.push(match color {
+                    Color::Red => 0,
+                    Color::Yellow => 1,
+                });
                 buf
             }
-            S2CPacket::DrawWasProposed => {
+            ClientBoundPacket::DrawWasProposed => {
                 let mut buf = Vec::new();
                 buf.push(3);
                 buf
             }
-            S2CPacket::GameResult { result } => {
+            ClientBoundPacket::GameResult { result } => {
                 let mut buf = Vec::new();
                 buf.push(4);
                 buf.push(match result {
-                    GameResult::RedWin => 0,
-                    GameResult::YellowWin => 1,
-                    GameResult::Draw => 2,
+                    GameResult::InProgress => 0,
+                    GameResult::RedWin => 1,
+                    GameResult::YellowWin => 2,
+                    GameResult::Draw => 3,
                 });
                 buf
             }
@@ -154,11 +159,11 @@ impl Serialize for S2CPacket {
     }
 }
 
-impl Deserialize for S2CPacket {
+impl Deserialize for ClientBoundPacket {
     fn deserialize(buf: &[u8]) -> Self {
         match buf[0] {
-            0 => S2CPacket::AddedToQueue,
-            1 => S2CPacket::GameStart {
+            0 => ClientBoundPacket::AddedToQueue,
+            1 => ClientBoundPacket::GameStart {
                 opponent: String::from_utf8_lossy(&buf[1..buf.len() - 1]).to_string(),
                 your_color: match buf[buf.len() - 1] {
                     0 => Color::Red,
@@ -166,13 +171,21 @@ impl Deserialize for S2CPacket {
                     _ => panic!("Invalid color"),
                 },
             },
-            2 => S2CPacket::Move { col: buf[1] },
-            3 => S2CPacket::DrawWasProposed,
-            4 => S2CPacket::GameResult {
+            2 => ClientBoundPacket::Move {
+                col: buf[1],
+                color: match buf[2] {
+                    0 => Color::Red,
+                    1 => Color::Yellow,
+                    _ => panic!("Invalid color"),
+                },
+            },
+            3 => ClientBoundPacket::DrawWasProposed,
+            4 => ClientBoundPacket::GameResult {
                 result: match buf[1] {
-                    0 => GameResult::RedWin,
-                    1 => GameResult::YellowWin,
-                    2 => GameResult::Draw,
+                    0 => GameResult::InProgress,
+                    1 => GameResult::RedWin,
+                    2 => GameResult::YellowWin,
+                    3 => GameResult::Draw,
                     _ => panic!("Invalid game result"),
                 },
             },
@@ -183,31 +196,146 @@ impl Deserialize for S2CPacket {
 
 #[test]
 fn test_serialize_deserialize() {
-    let c2s_packets = vec![
-        C2SPacket::Init {
+    let serverbound_packets = vec![
+        ServerBoundPacket::Init {
             name: "Blechdavier".to_string(),
         },
-        C2SPacket::Move { col: 3 },
-        C2SPacket::ProposeDraw,
-        C2SPacket::AcceptDraw,
-        C2SPacket::Forfeit,
+        ServerBoundPacket::Move { col: 3 },
+        ServerBoundPacket::ProposeDraw,
+        ServerBoundPacket::AcceptDraw,
+        ServerBoundPacket::Forfeit,
     ];
-    let s2c_packets = vec![
-        S2CPacket::AddedToQueue,
-        S2CPacket::GameStart {
+    let clientbound_packets = vec![
+        ClientBoundPacket::AddedToQueue,
+        ClientBoundPacket::GameStart {
             opponent: "Blechdavier".to_string(),
             your_color: Color::Red,
         },
-        S2CPacket::Move { col: 3 },
-        S2CPacket::DrawWasProposed,
-        S2CPacket::GameResult {
+        ClientBoundPacket::Move {
+            col: 3,
+            color: Color::Red,
+        },
+        ClientBoundPacket::DrawWasProposed,
+        ClientBoundPacket::GameResult {
             result: GameResult::RedWin,
         },
     ];
-    for packet in c2s_packets {
-        assert_eq!(packet, C2SPacket::deserialize(&packet.serialize()));
+    for packet in serverbound_packets {
+        assert_eq!(packet, ServerBoundPacket::deserialize(&packet.serialize()));
     }
-    for packet in s2c_packets {
-        assert_eq!(packet, S2CPacket::deserialize(&packet.serialize()));
+    for packet in clientbound_packets {
+        assert_eq!(packet, ClientBoundPacket::deserialize(&packet.serialize()));
+    }
+}
+
+pub struct Board([[i32; 7]; 6]);
+
+impl Board {
+    pub fn new() -> Self {
+        Board([[0; 7]; 6])
+    }
+    pub fn score(&self) -> GameResult {
+        let board = self.0;
+        // check for horizontal wins
+        for row in 0..6 {
+            for col in 0..4 {
+                if board[row][col] != 0
+                    && board[row][col] == board[row][col + 1]
+                    && board[row][col] == board[row][col + 2]
+                    && board[row][col] == board[row][col + 3]
+                {
+                    return match board[row][col] {
+                        1 => GameResult::RedWin,
+                        2 => GameResult::YellowWin,
+                        _ => panic!("Invalid board state"),
+                    };
+                }
+            }
+        }
+        // check for vertical wins
+        for row in 0..3 {
+            for col in 0..7 {
+                if board[row][col] != 0
+                    && board[row][col] == board[row + 1][col]
+                    && board[row][col] == board[row + 2][col]
+                    && board[row][col] == board[row + 3][col]
+                {
+                    return match board[row][col] {
+                        1 => GameResult::RedWin,
+                        2 => GameResult::YellowWin,
+                        _ => panic!("Invalid board state"),
+                    };
+                }
+            }
+        }
+        // check for diagonal wins
+        for row in 0..3 {
+            for col in 0..4 {
+                if board[row][col] != 0
+                    && board[row][col] == board[row + 1][col + 1]
+                    && board[row][col] == board[row + 2][col + 2]
+                    && board[row][col] == board[row + 3][col + 3]
+                {
+                    return match board[row][col] {
+                        1 => GameResult::RedWin,
+                        2 => GameResult::YellowWin,
+                        _ => panic!("Invalid board state"),
+                    };
+                }
+            }
+        }
+        // check for diagonal wins
+        for row in 0..3 {
+            for col in 3..7 {
+                if board[row][col] != 0
+                    && board[row][col] == board[row + 1][col - 1]
+                    && board[row][col] == board[row + 2][col - 2]
+                    && board[row][col] == board[row + 3][col - 3]
+                {
+                    return match board[row][col] {
+                        1 => GameResult::RedWin,
+                        2 => GameResult::YellowWin,
+                        _ => panic!("Invalid board state"),
+                    };
+                }
+            }
+        }
+        // check for draw
+        for row in 0..6 {
+            for col in 0..7 {
+                if board[row][col] == 0 {
+                    return GameResult::InProgress;
+                }
+            }
+        }
+        // if we get here, the board is full and there are no wins
+        GameResult::Draw
+    }
+
+    pub fn play_move(&mut self, col: u8, piece: i32) -> Result<(), ()> {
+        let mut board = self.0;
+        if col > 6 {
+            return Err(());
+        }
+        for row in (0..6).rev() {
+            if board[row as usize][col as usize] == 0 {
+                board[row as usize][col as usize] = piece;
+                return Ok(());
+            }
+        }
+        Err(())
+    }
+
+    pub fn legal_move(&mut self, col: u8) -> Result<(), ()> {
+        let board = self.0;
+        if col > 6 {
+            return Err(());
+        }
+        for row in (0..6).rev() {
+            if board[row as usize][col as usize] == 0 {
+                return Ok(());
+            }
+        }
+        Err(())
     }
 }
