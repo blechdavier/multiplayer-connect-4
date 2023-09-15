@@ -1,21 +1,31 @@
 use connect_4::{send_packet, Board, ClientBoundPacket, Color, Deserialize, ServerBoundPacket};
+use core::panic;
 use std::error::Error;
 use std::io;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 
+use std::env;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let args: Vec<String> = env::args().collect();
+    if args.contains(&"auto".to_string()) {
+        println!("auto mode");
+    }
     // Connect to a peer
     let mut stream = TcpStream::connect("127.0.0.1:8080").await?;
+    let mut name = String::new();
+    let mut opponent_name = String::new();
+    println!("What is your name?");
+    if let Err(_) = io::stdin().read_line(&mut name) {
+        println!("Failed to read line. Your name is now \"Player\".");
+        name = "Player".to_string();
+    } else {
+        name = name.trim().to_string();
+    }
 
-    send_packet(
-        ServerBoundPacket::Init {
-            name: "Blechdavier".to_string(),
-        },
-        &mut stream,
-    )
-    .await?;
+    send_packet(ServerBoundPacket::Init { name: name.clone() }, &mut stream).await?;
 
     let mut client_color = Color::Red;
     let mut board = Board::new();
@@ -28,8 +38,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 opponent,
                 your_color,
             } => {
+                opponent_name = opponent;
                 client_color = your_color;
-                println!("Game started against {} as {:?}", opponent, &client_color);
+                print!("\x1B[2J\x1B[1;1H");
+                if &client_color == &Color::Red {
+                    println!("Red: {} (you)\nYellow: {}\n{}", &name, opponent_name, board);
+                } else {
+                    println!("Red: {}\nYellow: {} (you)\n{}", opponent_name, &name, board);
+                }
                 if &client_color == &Color::Red {
                     play(&mut board, &mut stream).await?;
                 }
@@ -44,12 +60,37 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         },
                     )
                     .unwrap();
+                print!("\x1B[2J\x1B[1;1H");
+                if &client_color == &Color::Red {
+                    println!("Red: {} (you)\nYellow: {}\n{}", &name, opponent_name, board);
+                } else {
+                    println!("Red: {}\nYellow: {} (you)\n{}", opponent_name, &name, board);
+                }
+
                 if color != client_color {
                     play(&mut board, &mut stream).await?;
                 }
+                print!("\x1B[2J\x1B[1;1H");
             }
-            _ => {
-                todo!();
+            ClientBoundPacket::GameResult { result, col, color } => {
+                if let Some(col) = col {
+                    board
+                        .play_move(
+                            col,
+                            match color {
+                                Color::Red => 1,
+                                Color::Yellow => 2,
+                            },
+                        )
+                        .unwrap();
+                }
+                if &client_color == &Color::Red {
+                    println!("Red: {} (you)\nYellow: {}\n{}", &name, opponent_name, board);
+                } else {
+                    println!("Red: {}\nYellow: {} (you)\n{}", opponent_name, &name, board);
+                }
+                println!("Game over! Result: {:?}", result);
+                break;
             }
         }
     }
@@ -77,6 +118,10 @@ async fn play(board: &mut Board, stream: &mut TcpStream) -> Result<(), Box<dyn E
             }
             println!("Playing in column {}", col);
             break col;
+        } else if buf.trim() == "forfeit" {
+            println!("Forfeiting game");
+            send_packet(ServerBoundPacket::Forfeit, stream).await?;
+            return Ok(());
         }
     };
     send_packet(ServerBoundPacket::Move { col }, stream).await?;

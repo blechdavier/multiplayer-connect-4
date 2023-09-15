@@ -66,7 +66,7 @@ async fn play_game(stream1: TcpStream, stream2: TcpStream) {
             Color::Red => {
                 // read move packet
                 let packet = read_serverbound_packet(&mut red_player).await;
-                println!("read serverbound packet: {:?}", packet);
+                println!("read serverbound packet from red: {:?}", packet);
                 match packet {
                     ServerBoundPacket::Move { col } => {
                         board.play_move(col, 1).unwrap();
@@ -96,13 +96,19 @@ async fn play_game(stream1: TcpStream, stream2: TcpStream) {
                                 send_packet(
                                     ClientBoundPacket::GameResult {
                                         result: result.clone(),
+                                        col: Some(col),
+                                        color: Color::Red,
                                     },
                                     &mut red_player,
                                 )
                                 .await
                                 .unwrap();
                                 send_packet(
-                                    ClientBoundPacket::GameResult { result },
+                                    ClientBoundPacket::GameResult {
+                                        result,
+                                        col: Some(col),
+                                        color: Color::Red,
+                                    },
                                     &mut yellow_player,
                                 )
                                 .await
@@ -118,10 +124,11 @@ async fn play_game(stream1: TcpStream, stream2: TcpStream) {
             }
             Color::Yellow => {
                 // read move packet
-                let packet = read_serverbound_packet(&mut red_player).await;
+                let packet = read_serverbound_packet(&mut yellow_player).await;
+                println!("read serverbound packet from yellow: {:?}", packet);
                 match packet {
                     ServerBoundPacket::Move { col } => {
-                        board.play_move(col, 1).unwrap();
+                        board.play_move(col, 2).unwrap();
                         match board.score() {
                             GameResult::InProgress => {
                                 send_packet(
@@ -148,13 +155,19 @@ async fn play_game(stream1: TcpStream, stream2: TcpStream) {
                                 send_packet(
                                     ClientBoundPacket::GameResult {
                                         result: result.clone(),
+                                        col: Some(col),
+                                        color: Color::Yellow,
                                     },
                                     &mut red_player,
                                 )
                                 .await
                                 .unwrap();
                                 send_packet(
-                                    ClientBoundPacket::GameResult { result },
+                                    ClientBoundPacket::GameResult {
+                                        result,
+                                        col: Some(col),
+                                        color: Color::Yellow,
+                                    },
                                     &mut yellow_player,
                                 )
                                 .await
