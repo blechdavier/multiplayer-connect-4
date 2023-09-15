@@ -5,16 +5,19 @@ use std::io;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 
-use std::env;
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let args: Vec<String> = env::args().collect();
-    if args.contains(&"auto".to_string()) {
-        println!("auto mode");
+    let mut server_ip = String::new();
+    println!("What is the server IP?");
+    if let Err(_) = io::stdin().read_line(&mut server_ip) {
+        println!("Failed to read line");
+        return Ok(());
     }
-    // Connect to a peer
-    let mut stream = TcpStream::connect("127.0.0.1:8080").await?;
+    server_ip = server_ip.trim().to_string();
+    server_ip.push_str(":60941");
+    println!("Connecting to {}", server_ip);
+    // Connect to the server
+    let mut stream = TcpStream::connect(server_ip).await?;
     let mut name = String::new();
     let mut opponent_name = String::new();
     println!("What is your name?");
